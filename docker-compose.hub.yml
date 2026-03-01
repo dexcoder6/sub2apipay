@@ -1,0 +1,37 @@
+# docker-compose.hub.yml
+# 使用 Docker Hub 镜像部署（含自带 PostgreSQL）
+# 适合：全新服务器，无现有数据库
+#
+# 启动：docker compose -f docker-compose.hub.yml up -d
+# 更新：docker compose -f docker-compose.hub.yml pull && docker compose -f docker-compose.hub.yml up -d
+
+services:
+  app:
+    image: touwaeriol/sub2apipay:latest
+    ports:
+      - '${APP_PORT:-3001}:3000'
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://sub2apipay:${DB_PASSWORD:-password}@db:5432/sub2apipay
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sub2apipay
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: sub2apipay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sub2apipay']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

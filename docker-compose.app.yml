@@ -1,0 +1,14 @@
+# docker-compose.app.yml
+# 使用 Docker Hub 镜像部署（仅应用，外部数据库）
+# 适合：已有 PostgreSQL 实例，将 DATABASE_URL 填入 .env
+#
+# 启动：docker compose -f docker-compose.app.yml up -d
+# 更新：docker compose -f docker-compose.app.yml pull && docker compose -f docker-compose.app.yml up -d
+
+services:
+  app:
+    image: touwaeriol/sub2apipay:latest
+    ports:
+      - '${APP_PORT:-3001}:3000'
+    env_file: .env
+    restart: unless-stopped
