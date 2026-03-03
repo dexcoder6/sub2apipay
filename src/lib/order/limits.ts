@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getEnv } from '@/lib/config';
 import { initPaymentProviders, paymentRegistry } from '@/lib/payment';
+import { getMethodFeeRate } from './fee';
 
 /**
  * 获取指定支付渠道的每日全平台限额（0 = 不限制）。
@@ -55,6 +56,8 @@ export interface MethodLimitStatus {
   available: boolean;
   /** 单笔限额，0 = 使用全局配置 MAX_RECHARGE_AMOUNT */
   singleMax: number;
+  /** 手续费率百分比，0 = 无手续费 */
+  feeRate: number;
 }
 
 /**
@@ -85,6 +88,7 @@ export async function queryMethodLimits(
   for (const type of paymentTypes) {
     const dailyLimit = getMethodDailyLimit(type);
     const singleMax = getMethodSingleLimit(type);
+    const feeRate = getMethodFeeRate(type);
     const used = usageMap[type] ?? 0;
     const remaining = dailyLimit > 0 ? Math.max(0, dailyLimit - used) : null;
     result[type] = {
@@ -93,6 +97,7 @@ export async function queryMethodLimits(
       remaining,
       available: dailyLimit === 0 || used < dailyLimit,
       singleMax,
+      feeRate,
     };
   }
   return result;

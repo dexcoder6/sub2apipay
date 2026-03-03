@@ -12,10 +12,12 @@ import type {
 
 class MockProvider implements PaymentProvider {
   readonly name: string;
+  readonly providerKey: string;
   readonly supportedTypes: PaymentType[];
 
   constructor(name: string, types: PaymentType[]) {
     this.name = name;
+    this.providerKey = name;
     this.supportedTypes = types;
   }
 

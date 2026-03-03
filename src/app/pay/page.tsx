@@ -13,6 +13,7 @@ import type { MethodLimitInfo } from '@/components/PaymentForm';
 interface OrderResult {
   orderId: string;
   amount: number;
+  payAmount?: number;
   status: string;
   paymentType: 'alipay' | 'wxpay' | 'stripe';
   payUrl?: string | null;
@@ -255,6 +256,7 @@ function PayContent() {
       setOrderResult({
         orderId: data.orderId,
         amount: data.amount,
+        payAmount: data.payAmount,
         status: data.status,
         paymentType: data.paymentType || paymentType,
         payUrl: data.payUrl,
@@ -410,6 +412,7 @@ function PayContent() {
                   userName={userInfo?.username}
                   userBalance={userInfo?.balance}
                   enabledPaymentTypes={config.enabledPaymentTypes}
+                  methodLimits={config.methodLimits}
                   minAmount={config.minAmount}
                   maxAmount={config.maxAmount}
                   onSubmit={handleSubmit}
@@ -465,6 +468,7 @@ function PayContent() {
           checkoutUrl={orderResult.checkoutUrl}
           paymentType={orderResult.paymentType}
           amount={orderResult.amount}
+          payAmount={orderResult.payAmount}
           expiresAt={orderResult.expiresAt}
           onStatusChange={handleStatusChange}
           onBack={handleBack}

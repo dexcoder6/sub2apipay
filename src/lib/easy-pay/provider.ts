@@ -14,6 +14,7 @@ import { getEnv } from '@/lib/config';
 
 export class EasyPayProvider implements PaymentProvider {
   readonly name = 'easy-pay';
+  readonly providerKey = 'easypay';
   readonly supportedTypes: PaymentType[] = ['alipay', 'wxpay'];
   readonly defaultLimits = {
     alipay: { singleMax: 1000, dailyMax: 10000 },

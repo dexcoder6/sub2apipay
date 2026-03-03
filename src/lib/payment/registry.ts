@@ -30,6 +30,12 @@ export class PaymentProviderRegistry {
     const provider = this.providers.get(type as PaymentType);
     return provider?.defaultLimits?.[type];
   }
+
+  /** 获取指定渠道对应的提供商 key（如 'easypay'、'stripe'） */
+  getProviderKey(type: string): string | undefined {
+    const provider = this.providers.get(type as PaymentType);
+    return provider?.providerKey;
+  }
 }
 
 export const paymentRegistry = new PaymentProviderRegistry();

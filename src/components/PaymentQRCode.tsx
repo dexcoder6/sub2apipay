@@ -11,6 +11,7 @@ interface PaymentQRCodeProps {
   checkoutUrl?: string | null;
   paymentType?: 'alipay' | 'wxpay' | 'stripe';
   amount: number;
+  payAmount?: number;
   expiresAt: string;
   onStatusChange: (status: string) => void;
   onBack: () => void;
@@ -42,11 +43,14 @@ export default function PaymentQRCode({
   checkoutUrl,
   paymentType,
   amount,
+  payAmount: payAmountProp,
   expiresAt,
   onStatusChange,
   onBack,
   dark = false,
 }: PaymentQRCodeProps) {
+  const displayAmount = payAmountProp ?? amount;
+  const hasFeeDiff = payAmountProp !== undefined && payAmountProp !== amount;
   const [timeLeft, setTimeLeft] = useState('');
   const [expired, setExpired] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -196,7 +200,12 @@ export default function PaymentQRCode({
   return (
     <div className="flex flex-col items-center space-y-4">
       <div className="text-center">
-        <div className="text-4xl font-bold text-blue-600">{'\u00A5'}{amount.toFixed(2)}</div>
+        <div className="text-4xl font-bold text-blue-600">{'\u00A5'}{displayAmount.toFixed(2)}</div>
+        {hasFeeDiff && (
+          <div className={['mt-1 text-sm', dark ? 'text-slate-400' : 'text-gray-500'].join(' ')}>
+            到账 ¥{amount.toFixed(2)}
+          </div>
+        )}
         <div className={`mt-1 text-sm ${expired ? 'text-red-500' : dark ? 'text-slate-400' : 'text-gray-500'}`}>
           {expired ? TEXT_EXPIRED : `${TEXT_REMAINING}: ${timeLeft}`}
         </div>

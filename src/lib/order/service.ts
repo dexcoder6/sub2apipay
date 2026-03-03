@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { getEnv } from '@/lib/config';
 import { generateRechargeCode } from './code-gen';
 import { getMethodDailyLimit } from './limits';
+import { getMethodFeeRate, calculatePayAmount } from './fee';
 import { initPaymentProviders, paymentRegistry } from '@/lib/payment';
 import type { PaymentType, PaymentNotification } from '@/lib/payment';
 import { getUser, createAndRedeem, subtractBalance } from '@/lib/sub2api/client';
@@ -22,6 +23,8 @@ export interface CreateOrderInput {
 export interface CreateOrderResult {
   orderId: string;
   amount: number;
+  payAmount: number;
+  feeRate: number;
   status: string;
   paymentType: PaymentType;
   userName: string;
@@ -96,6 +99,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     }
   }
 
+  const feeRate = getMethodFeeRate(input.paymentType);
+  const payAmount = calculatePayAmount(input.amount, feeRate);
+
   const expiresAt = new Date(Date.now() + env.ORDER_TIMEOUT_MINUTES * 60 * 1000);
   const order = await prisma.order.create({
     data: {
@@ -104,6 +110,8 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       userName: user.username,
       userNotes: user.notes || null,
       amount: new Prisma.Decimal(input.amount.toFixed(2)),
+      payAmount: new Prisma.Decimal(payAmount.toFixed(2)),
+      feeRate: feeRate > 0 ? new Prisma.Decimal(feeRate.toFixed(2)) : null,
       rechargeCode: '',
       status: 'PENDING',
       paymentType: input.paymentType,
@@ -125,9 +133,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     const provider = paymentRegistry.getProvider(input.paymentType);
     const paymentResult = await provider.createPayment({
       orderId: order.id,
-      amount: input.amount,
+      amount: payAmount,
       paymentType: input.paymentType,
-      subject: `${env.PRODUCT_NAME} ${input.amount.toFixed(2)} CNY`,
+      subject: `${env.PRODUCT_NAME} ${payAmount.toFixed(2)} CNY`,
       notifyUrl: env.EASY_PAY_NOTIFY_URL || '',
       returnUrl: env.EASY_PAY_RETURN_URL || '',
       clientIp: input.clientIp,
@@ -154,6 +162,8 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     return {
       orderId: order.id,
       amount: input.amount,
+      payAmount,
+      feeRate,
       status: 'PENDING',
       paymentType: input.paymentType,
       userName: user.username,
@@ -313,10 +323,11 @@ export async function confirmPayment(input: {
     console.error(`${input.providerName} notify: non-positive amount:`, input.paidAmount);
     return false;
   }
-  if (!paidAmount.equals(order.amount)) {
+  const expectedAmount = order.payAmount ?? order.amount;
+  if (!paidAmount.equals(expectedAmount)) {
     console.warn(
       `${input.providerName} notify: amount changed, use paid amount`,
-      order.amount.toString(),
+      expectedAmount.toString(),
       paidAmount.toString(),
     );
   }
@@ -551,15 +562,16 @@ export async function processRefund(input: RefundInput): Promise<RefundResult> {
     throw new OrderError('INVALID_STATUS', 'Only completed orders can be refunded', 400);
   }
 
-  const amount = Number(order.amount);
+  const rechargeAmount = Number(order.amount);
+  const refundAmount = Number(order.payAmount ?? order.amount);
 
   if (!input.force) {
     try {
       const user = await getUser(order.userId);
-      if (user.balance < amount) {
+      if (user.balance < rechargeAmount) {
         return {
           success: false,
-          warning: `User balance ${user.balance} is lower than refund ${amount}`,
+          warning: `User balance ${user.balance} is lower than refund ${rechargeAmount}`,
           requireForce: true,
         };
       }
@@ -587,18 +599,18 @@ export async function processRefund(input: RefundInput): Promise<RefundResult> {
       await provider.refund({
         tradeNo: order.paymentTradeNo,
         orderId: order.id,
-        amount,
+        amount: refundAmount,
         reason: input.reason,
       });
     }
 
-    await subtractBalance(order.userId, amount, `sub2apipay refund order:${order.id}`, `sub2apipay:refund:${order.id}`);
+    await subtractBalance(order.userId, rechargeAmount, `sub2apipay refund order:${order.id}`, `sub2apipay:refund:${order.id}`);
 
     await prisma.order.update({
       where: { id: input.orderId },
       data: {
         status: 'REFUNDED',
-        refundAmount: new Prisma.Decimal(amount.toFixed(2)),
+        refundAmount: new Prisma.Decimal(refundAmount.toFixed(2)),
         refundReason: input.reason || null,
         refundAt: new Date(),
         forceRefund: input.force || false,
@@ -609,7 +621,7 @@ export async function processRefund(input: RefundInput): Promise<RefundResult> {
       data: {
         orderId: input.orderId,
         action: 'REFUND_SUCCESS',
-        detail: JSON.stringify({ amount, reason: input.reason, force: input.force }),
+        detail: JSON.stringify({ rechargeAmount, refundAmount, reason: input.reason, force: input.force }),
         operator: 'admin',
       },
     });

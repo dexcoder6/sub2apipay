@@ -62,6 +62,7 @@ export interface MethodDefaultLimits {
 /** Common interface that all payment providers must implement */
 export interface PaymentProvider {
   readonly name: string;
+  readonly providerKey: string;
   readonly supportedTypes: PaymentType[];
   /** 各渠道默认限额，key 为 PaymentType（如 'alipay'），可被环境变量覆盖 */
   readonly defaultLimits?: Record<string, MethodDefaultLimits>;

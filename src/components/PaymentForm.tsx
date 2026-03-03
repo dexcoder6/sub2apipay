@@ -8,6 +8,8 @@ export interface MethodLimitInfo {
   remaining: number | null;
   /** 单笔限额，0 = 使用全局 maxAmount */
   singleMax?: number;
+  /** 手续费率百分比，0 = 无手续费 */
+  feeRate?: number;
 }
 
 interface PaymentFormProps {
@@ -75,6 +77,13 @@ export default function PaymentForm({
   const isMethodAvailable = !methodLimits || (methodLimits[paymentType]?.available !== false);
   const methodSingleMax = methodLimits?.[paymentType]?.singleMax;
   const effectiveMax = (methodSingleMax !== undefined && methodSingleMax > 0) ? methodSingleMax : maxAmount;
+  const feeRate = methodLimits?.[paymentType]?.feeRate ?? 0;
+  const feeAmount = feeRate > 0 && selectedAmount > 0
+    ? Math.ceil(selectedAmount * feeRate / 100 * 100) / 100
+    : 0;
+  const payAmount = feeRate > 0 && selectedAmount > 0
+    ? Math.round((selectedAmount + feeAmount) * 100) / 100
+    : selectedAmount;
   const isValid = selectedAmount >= minAmount && selectedAmount <= effectiveMax && hasValidCentPrecision(selectedAmount) && isMethodAvailable;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -277,6 +286,32 @@ export default function PaymentForm({
         })()}
       </div>
 
+      {/* Fee Detail */}
+      {feeRate > 0 && selectedAmount > 0 && (
+        <div
+          className={[
+            'rounded-xl border px-4 py-3 text-sm',
+            dark ? 'border-slate-700 bg-slate-800/60 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600',
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between">
+            <span>充值金额</span>
+            <span>¥{selectedAmount.toFixed(2)}</span>
+          </div>
+          <div className="flex items-center justify-between mt-1">
+            <span>手续费（{feeRate}%）</span>
+            <span>¥{feeAmount.toFixed(2)}</span>
+          </div>
+          <div className={[
+            'flex items-center justify-between mt-1.5 pt-1.5 border-t font-medium',
+            dark ? 'border-slate-700 text-slate-100' : 'border-slate-200 text-slate-900',
+          ].join(' ')}>
+            <span>实付金额</span>
+            <span>¥{payAmount.toFixed(2)}</span>
+          </div>
+        </div>
+      )}
+
       {/* Submit */}
       <button
         type="submit"
@@ -291,7 +326,7 @@ export default function PaymentForm({
               : 'cursor-not-allowed bg-gray-300'
         }`}
       >
-        {loading ? '处理中...' : `立即充值 ¥${selectedAmount || 0}`}
+        {loading ? '处理中...' : `立即充值 ¥${(feeRate > 0 && selectedAmount > 0 ? payAmount : selectedAmount || 0).toFixed(2)}`}
       </button>
     </form>
   );
