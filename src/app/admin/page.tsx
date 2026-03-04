@@ -162,6 +162,16 @@ function AdminContent() {
     REFUNDED: '已退款',
   };
 
+  const navParams = new URLSearchParams();
+  if (token) navParams.set('token', token);
+  if (isDark) navParams.set('theme', 'dark');
+  if (isEmbedded) navParams.set('ui_mode', 'embedded');
+
+  const btnBase = [
+    'inline-flex items-center rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+    isDark ? 'border-slate-600 text-slate-200 hover:bg-slate-800' : 'border-slate-300 text-slate-700 hover:bg-slate-100',
+  ].join(' ');
+
   return (
     <PayPageLayout
       isDark={isDark}
@@ -170,16 +180,14 @@ function AdminContent() {
       title="订单管理"
       subtitle="查看和管理所有充值订单"
       actions={
-        <button
-          type="button"
-          onClick={fetchOrders}
-          className={[
-            'inline-flex items-center rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-            isDark ? 'border-slate-600 text-slate-200 hover:bg-slate-800' : 'border-slate-300 text-slate-700 hover:bg-slate-100',
-          ].join(' ')}
-        >
-          刷新
-        </button>
+        <>
+          <a href={`/admin/dashboard?${navParams}`} className={btnBase}>
+            数据概览
+          </a>
+          <button type="button" onClick={fetchOrders} className={btnBase}>
+            刷新
+          </button>
+        </>
       }
     >
       {error && (
