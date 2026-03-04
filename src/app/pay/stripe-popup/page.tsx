@@ -1,0 +1,267 @@
+'use client';
+
+import { useSearchParams } from 'next/navigation';
+import { useEffect, useState, useCallback, Suspense } from 'react';
+
+// Methods that can be confirmed directly without Payment Element
+const DIRECT_CONFIRM_METHODS: Record<string, string> = {
+  alipay: 'confirmAlipayPayment',
+};
+
+function StripePopupContent() {
+  const searchParams = useSearchParams();
+  const orderId = searchParams.get('order_id') || '';
+  const clientSecret = searchParams.get('client_secret') || '';
+  const pk = searchParams.get('pk') || '';
+  const amount = parseFloat(searchParams.get('amount') || '0') || 0;
+  const theme = searchParams.get('theme') === 'dark' ? 'dark' : 'light';
+  const method = searchParams.get('method') || '';
+  const isDark = theme === 'dark';
+  const hasMissingParams = !orderId || !clientSecret || !pk;
+
+  const [stripeLoaded, setStripeLoaded] = useState(false);
+  const [stripeSubmitting, setStripeSubmitting] = useState(false);
+  const [stripeError, setStripeError] = useState('');
+  const [stripeSuccess, setStripeSuccess] = useState(false);
+  const [stripeLib, setStripeLib] = useState<{
+    stripe: import('@stripe/stripe-js').Stripe;
+    elements: import('@stripe/stripe-js').StripeElements;
+  } | null>(null);
+
+  const directConfirmMethod = DIRECT_CONFIRM_METHODS[method];
+
+  const buildReturnUrl = useCallback(() => {
+    const returnUrl = new URL(window.location.href);
+    returnUrl.pathname = '/pay/result';
+    returnUrl.search = '';
+    returnUrl.searchParams.set('order_id', orderId);
+    returnUrl.searchParams.set('status', 'success');
+    returnUrl.searchParams.set('popup', '1');
+    return returnUrl.toString();
+  }, [orderId]);
+
+  // Initialize Stripe and auto-confirm for direct methods (e.g. Alipay)
+  useEffect(() => {
+    if (hasMissingParams) return;
+    let cancelled = false;
+    import('@stripe/stripe-js').then(({ loadStripe }) => {
+      loadStripe(pk).then((stripe) => {
+        if (cancelled || !stripe) {
+          if (!cancelled) {
+            setStripeError('支付组件加载失败，请关闭窗口重试');
+            setStripeLoaded(true);
+          }
+          return;
+        }
+
+        if (directConfirmMethod) {
+          // Direct confirm (e.g. Alipay) — immediately redirect, no Payment Element needed
+          const confirmFn = (stripe as unknown as Record<string, Function>)[directConfirmMethod];
+          if (typeof confirmFn === 'function') {
+            confirmFn.call(stripe, clientSecret, {
+              return_url: buildReturnUrl(),
+            }).then((result: { error?: { message?: string } }) => {
+              if (cancelled) return;
+              if (result.error) {
+                setStripeError(result.error.message || '支付失败，请重试');
+                setStripeLoaded(true);
+              }
+              // If no error, the page has already been redirected
+            });
+          }
+          return;
+        }
+
+        // Fallback: create Elements for Payment Element flow
+        const elements = stripe.elements({
+          clientSecret,
+          appearance: {
+            theme: isDark ? 'night' : 'stripe',
+            variables: { borderRadius: '8px' },
+          },
+        });
+        setStripeLib({ stripe, elements });
+        setStripeLoaded(true);
+      });
+    });
+    return () => { cancelled = true; };
+  }, [pk, clientSecret, isDark, directConfirmMethod, hasMissingParams, buildReturnUrl]);
+
+  // Mount Payment Element (only for non-direct methods)
+  const stripeContainerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node || !stripeLib) return;
+      const existing = stripeLib.elements.getElement('payment');
+      if (existing) {
+        existing.mount(node);
+      } else {
+        stripeLib.elements.create('payment', { layout: 'tabs' }).mount(node);
+      }
+    },
+    [stripeLib],
+  );
+
+  const handleSubmit = async () => {
+    if (!stripeLib || stripeSubmitting) return;
+    setStripeSubmitting(true);
+    setStripeError('');
+
+    const { stripe, elements } = stripeLib;
+
+    const { error } = await stripe.confirmPayment({
+      elements,
+      confirmParams: {
+        return_url: buildReturnUrl(),
+      },
+      redirect: 'if_required',
+    });
+
+    if (error) {
+      setStripeError(error.message || '支付失败，请重试');
+      setStripeSubmitting(false);
+    } else {
+      setStripeSuccess(true);
+      setStripeSubmitting(false);
+    }
+  };
+
+  // Auto-close after success
+  useEffect(() => {
+    if (!stripeSuccess) return;
+    const timer = setTimeout(() => {
+      window.close();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [stripeSuccess]);
+
+  // Missing params — show error (after all hooks)
+  if (hasMissingParams) {
+    return (
+      <div className={`flex min-h-screen items-center justify-center p-4 ${isDark ? 'bg-slate-950 text-white' : 'bg-slate-50'}`}>
+        <div className="text-center text-red-500">
+          <p className="text-lg font-medium">参数缺失</p>
+          <p className="mt-2 text-sm text-gray-500">请从支付页面正常打开此窗口</p>
+        </div>
+      </div>
+    );
+  }
+
+  // For direct confirm methods, show a loading/redirecting state
+  if (directConfirmMethod) {
+    return (
+      <div className={`flex min-h-screen items-center justify-center p-4 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
+        <div className={`w-full max-w-md space-y-4 rounded-2xl border p-6 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'} shadow-lg`}>
+          <div className="text-center">
+            <div className="text-3xl font-bold text-blue-600">{'\u00A5'}{amount.toFixed(2)}</div>
+            <p className={`mt-1 text-sm ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
+              订单号: {orderId}
+            </p>
+          </div>
+          {stripeError ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+                {stripeError}
+              </div>
+              <button
+                type="button"
+                onClick={() => window.close()}
+                className="w-full text-sm text-blue-600 underline hover:text-blue-700"
+              >
+                关闭窗口
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center py-8">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#635bff] border-t-transparent" />
+              <span className={`ml-3 text-sm ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
+                正在跳转到支付页面...
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex min-h-screen items-center justify-center p-4 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
+      <div className={`w-full max-w-md space-y-4 rounded-2xl border p-6 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'} shadow-lg`}>
+        <div className="text-center">
+          <div className="text-3xl font-bold text-blue-600">{'\u00A5'}{amount.toFixed(2)}</div>
+          <p className={`mt-1 text-sm ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
+            订单号: {orderId}
+          </p>
+        </div>
+
+        {!stripeLoaded ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#635bff] border-t-transparent" />
+            <span className={`ml-3 text-sm ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
+              正在加载支付表单...
+            </span>
+          </div>
+        ) : stripeSuccess ? (
+          <div className="py-6 text-center">
+            <div className="text-5xl text-green-600">{'\u2713'}</div>
+            <p className={`mt-3 text-sm ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
+              支付成功，窗口即将自动关闭...
+            </p>
+            <button
+              type="button"
+              onClick={() => window.close()}
+              className="mt-4 text-sm text-blue-600 underline hover:text-blue-700"
+            >
+              手动关闭窗口
+            </button>
+          </div>
+        ) : (
+          <>
+            {stripeError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+                {stripeError}
+              </div>
+            )}
+            <div
+              ref={stripeContainerRef}
+              className={`rounded-lg border p-4 ${isDark ? 'border-slate-700 bg-slate-800' : 'border-gray-200 bg-white'}`}
+            />
+            <button
+              type="button"
+              disabled={stripeSubmitting}
+              onClick={handleSubmit}
+              className={[
+                'w-full rounded-lg py-3 font-medium text-white shadow-md transition-colors',
+                stripeSubmitting
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-[#635bff] hover:bg-[#5249d9] active:bg-[#4840c4]',
+              ].join(' ')}
+            >
+              {stripeSubmitting ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  处理中...
+                </span>
+              ) : (
+                `支付 ¥${amount.toFixed(2)}`
+              )}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function StripePopupPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">
+          <div className="text-gray-500">加载中...</div>
+        </div>
+      }
+    >
+      <StripePopupContent />
+    </Suspense>
+  );
+}

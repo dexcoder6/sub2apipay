@@ -146,7 +146,7 @@ ENABLED_PAYMENT_TYPES=alipay,wxpay
 | `STRIPE_WEBHOOK_SECRET` | Stripe Webhook 签名密钥（`whsec_...`） |
 
 > Stripe Webhook 端点：`${NEXT_PUBLIC_APP_URL}/api/stripe/webhook`
-> 需订阅事件：`checkout.session.completed`、`checkout.session.expired`
+> 需订阅事件：`payment_intent.succeeded`、`payment_intent.payment_failed`
 
 ### 业务规则
 
@@ -310,7 +310,7 @@ Sub2API **v0.1.88** 及以上版本会自动拼接以下参数，无需手动添
        ▼
   用户完成支付
   ├─ EasyPay → 扫码 / H5 跳转
-  └─ Stripe  → Checkout Session
+  └─ Stripe  → Payment Element (PaymentIntent)
        │
        ▼
   支付回调（签名验证）→ 订单 PAID

@@ -31,7 +31,7 @@ export interface CreateOrderResult {
   userBalance: number;
   payUrl?: string | null;
   qrCode?: string | null;
-  checkoutUrl?: string | null;
+  clientSecret?: string | null;
   expiresAt: Date;
 }
 
@@ -170,7 +170,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       userBalance: user.balance,
       payUrl: paymentResult.payUrl,
       qrCode: paymentResult.qrCode,
-      checkoutUrl: paymentResult.checkoutUrl,
+      clientSecret: paymentResult.clientSecret,
       expiresAt,
     };
   } catch (error) {
@@ -181,6 +181,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
 
     // 支付网关配置缺失或调用失败，转成友好错误
     const msg = error instanceof Error ? error.message : String(error);
+    console.error(`Payment gateway error (${input.paymentType}):`, error);
     if (msg.includes('environment variables') || msg.includes('not configured') || msg.includes('not found')) {
       throw new OrderError('PAYMENT_GATEWAY_ERROR', `支付渠道（${input.paymentType}）暂未配置，请联系管理员`, 503);
     }

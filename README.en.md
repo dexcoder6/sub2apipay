@@ -146,7 +146,7 @@ Any payment provider compatible with the **EasyPay protocol** can be used, such 
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
 
 > Stripe webhook endpoint: `${NEXT_PUBLIC_APP_URL}/api/stripe/webhook`
-> Subscribe to: `checkout.session.completed`, `checkout.session.expired`
+> Subscribe to: `payment_intent.succeeded`, `payment_intent.payment_failed`
 
 ### Business Rules
 
@@ -310,7 +310,7 @@ User submits recharge amount
          ▼
   User completes payment
   ├─ EasyPay → QR code / H5 redirect
-  └─ Stripe  → Checkout Session
+  └─ Stripe  → Payment Element (PaymentIntent)
          │
          ▼
   Payment callback (signature verified) → Order PAID

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import QRCode from 'qrcode';
 
 interface PaymentQRCodeProps {
@@ -8,7 +8,8 @@ interface PaymentQRCodeProps {
   token?: string;
   payUrl?: string | null;
   qrCode?: string | null;
-  checkoutUrl?: string | null;
+  clientSecret?: string | null;
+  stripePublishableKey?: string | null;
   paymentType?: 'alipay' | 'wxpay' | 'stripe';
   amount: number;
   payAmount?: number;
@@ -16,6 +17,7 @@ interface PaymentQRCodeProps {
   onStatusChange: (status: string) => void;
   onBack: () => void;
   dark?: boolean;
+  isEmbedded?: boolean;
 }
 
 const TEXT_EXPIRED = '\u8BA2\u5355\u5DF2\u8D85\u65F6';
@@ -26,21 +28,13 @@ const TEXT_BACK = '\u8FD4\u56DE';
 const TEXT_CANCEL_ORDER = '\u53D6\u6D88\u8BA2\u5355';
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED', 'REFUNDED', 'REFUND_FAILED']);
 
-function isSafeCheckoutUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.hostname.endsWith('.stripe.com');
-  } catch {
-    return false;
-  }
-}
-
 export default function PaymentQRCode({
   orderId,
   token,
   payUrl,
   qrCode,
-  checkoutUrl,
+  clientSecret,
+  stripePublishableKey,
   paymentType,
   amount,
   payAmount: payAmountProp,
@@ -48,6 +42,7 @@ export default function PaymentQRCode({
   onStatusChange,
   onBack,
   dark = false,
+  isEmbedded = false,
 }: PaymentQRCodeProps) {
   const displayAmount = payAmountProp ?? amount;
   const hasFeeDiff = payAmountProp !== undefined && payAmountProp !== amount;
@@ -55,8 +50,21 @@ export default function PaymentQRCode({
   const [expired, setExpired] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [imageLoading, setImageLoading] = useState(false);
-  const [stripeOpened, setStripeOpened] = useState(false);
   const [cancelBlocked, setCancelBlocked] = useState(false);
+
+  // Stripe Payment Element state
+  const [stripeLoaded, setStripeLoaded] = useState(false);
+  const [stripeSubmitting, setStripeSubmitting] = useState(false);
+  const [stripeError, setStripeError] = useState('');
+  const [stripeSuccess, setStripeSuccess] = useState(false);
+  const [stripeLib, setStripeLib] = useState<{
+    stripe: import('@stripe/stripe-js').Stripe;
+    elements: import('@stripe/stripe-js').StripeElements;
+  } | null>(null);
+  // Track selected payment method in Payment Element (for embedded popup decision)
+  const [stripePaymentMethod, setStripePaymentMethod] = useState('card');
+  const [popupBlocked, setPopupBlocked] = useState(false);
+  const paymentMethodListenerAdded = useRef(false);
 
   const qrPayload = useMemo(() => {
     const value = (qrCode || payUrl || '').trim();
@@ -96,6 +104,123 @@ export default function PaymentQRCode({
       cancelled = true;
     };
   }, [qrPayload]);
+
+  // Initialize Stripe Payment Element
+  const isStripe = paymentType === 'stripe';
+
+  useEffect(() => {
+    if (!isStripe || !clientSecret || !stripePublishableKey) return;
+    let cancelled = false;
+
+    import('@stripe/stripe-js').then(({ loadStripe }) => {
+      loadStripe(stripePublishableKey).then((stripe) => {
+        if (cancelled) return;
+        if (!stripe) {
+          setStripeError('支付组件加载失败，请刷新页面重试');
+          setStripeLoaded(true);
+          return;
+        }
+        const elements = stripe.elements({
+          clientSecret,
+          appearance: {
+            theme: dark ? 'night' : 'stripe',
+            variables: {
+              borderRadius: '8px',
+            },
+          },
+        });
+        setStripeLib({ stripe, elements });
+        setStripeLoaded(true);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isStripe, clientSecret, stripePublishableKey, dark]);
+
+  // Mount Payment Element when container is available
+  const stripeContainerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node || !stripeLib) return;
+      let pe = stripeLib.elements.getElement('payment');
+      if (pe) {
+        pe.mount(node);
+      } else {
+        pe = stripeLib.elements.create('payment', { layout: 'tabs' });
+        pe.mount(node);
+      }
+      if (!paymentMethodListenerAdded.current) {
+        paymentMethodListenerAdded.current = true;
+        pe.on('change', (event: { value?: { type?: string } }) => {
+          if (event.value?.type) {
+            setStripePaymentMethod(event.value.type);
+          }
+        });
+      }
+    },
+    [stripeLib],
+  );
+
+  const handleStripeSubmit = async () => {
+    if (!stripeLib || stripeSubmitting) return;
+
+    // In embedded mode, Alipay redirects to a page with X-Frame-Options that breaks iframe
+    if (isEmbedded && stripePaymentMethod === 'alipay') {
+      handleOpenPopup();
+      return;
+    }
+
+    setStripeSubmitting(true);
+    setStripeError('');
+
+    const { stripe, elements } = stripeLib;
+    const returnUrl = new URL(window.location.href);
+    returnUrl.pathname = '/pay/result';
+    returnUrl.searchParams.set('order_id', orderId);
+    returnUrl.searchParams.set('status', 'success');
+
+    const { error } = await stripe.confirmPayment({
+      elements,
+      confirmParams: {
+        return_url: returnUrl.toString(),
+      },
+      redirect: 'if_required',
+    });
+
+    if (error) {
+      setStripeError(error.message || '支付失败，请重试');
+      setStripeSubmitting(false);
+    } else {
+      // Payment succeeded (or no redirect needed)
+      setStripeSuccess(true);
+      setStripeSubmitting(false);
+      // Polling will pick up the status change
+    }
+  };
+
+  const handleOpenPopup = () => {
+    if (!clientSecret || !stripePublishableKey) return;
+    setPopupBlocked(false);
+    const popupUrl = new URL(window.location.href);
+    popupUrl.pathname = '/pay/stripe-popup';
+    popupUrl.search = '';
+    popupUrl.searchParams.set('order_id', orderId);
+    popupUrl.searchParams.set('client_secret', clientSecret);
+    popupUrl.searchParams.set('pk', stripePublishableKey);
+    popupUrl.searchParams.set('amount', String(amount));
+    popupUrl.searchParams.set('theme', dark ? 'dark' : 'light');
+    popupUrl.searchParams.set('method', stripePaymentMethod);
+
+    const popup = window.open(
+      popupUrl.toString(),
+      'stripe_payment',
+      'width=500,height=700,scrollbars=yes',
+    );
+    if (!popup || popup.closed) {
+      setPopupBlocked(true);
+    }
+  };
 
   useEffect(() => {
     const updateTimer = () => {
@@ -173,7 +298,6 @@ export default function PaymentQRCode({
     }
   };
 
-  const isStripe = paymentType === 'stripe';
   const isWx = paymentType === 'wxpay';
   const iconSrc = isStripe ? '' : isWx ? '/icons/wxpay.svg' : '/icons/alipay.svg';
   const channelLabel = isStripe ? 'Stripe' : isWx ? '\u5FAE\u4FE1' : '\u652F\u4ED8\u5B9D';
@@ -214,48 +338,72 @@ export default function PaymentQRCode({
       {!expired && (
         <>
           {isStripe ? (
-            <>
-              <button
-                type="button"
-                disabled={!checkoutUrl || !isSafeCheckoutUrl(checkoutUrl) || stripeOpened}
-                onClick={() => {
-                  if (checkoutUrl && isSafeCheckoutUrl(checkoutUrl)) {
-                    window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
-                    setStripeOpened(true);
-                  }
-                }}
-                className={[
-                  'inline-flex items-center gap-2 rounded-lg px-8 py-3 font-medium text-white shadow-md transition-colors',
-                  !checkoutUrl || !isSafeCheckoutUrl(checkoutUrl) || stripeOpened
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-[#635bff] hover:bg-[#5249d9] active:bg-[#4840c4]',
-                ].join(' ')}
-              >
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                  <line x1="1" y1="10" x2="23" y2="10" />
-                </svg>
-                {stripeOpened ? '\u5DF2\u6253\u5F00\u652F\u4ED8\u9875\u9762' : '\u524D\u5F80 Stripe \u652F\u4ED8'}
-              </button>
-              {stripeOpened && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (checkoutUrl && isSafeCheckoutUrl(checkoutUrl)) {
-                      window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
-                    }
-                  }}
-                  className={['text-sm underline', dark ? 'text-slate-400 hover:text-slate-300' : 'text-gray-500 hover:text-gray-700'].join(' ')}
-                >
-                  {'\u91CD\u65B0\u6253\u5F00\u652F\u4ED8\u9875\u9762'}
-                </button>
+            <div className="w-full max-w-md space-y-4">
+              {!clientSecret || !stripePublishableKey ? (
+                <div className={['rounded-lg border-2 border-dashed p-8 text-center', dark ? 'border-slate-700' : 'border-gray-300'].join(' ')}>
+                  <p className={['text-sm', dark ? 'text-slate-400' : 'text-gray-500'].join(' ')}>
+                    支付初始化失败，请返回重试
+                  </p>
+                </div>
+              ) : !stripeLoaded ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#635bff] border-t-transparent" />
+                  <span className={['ml-3 text-sm', dark ? 'text-slate-400' : 'text-gray-500'].join(' ')}>
+                    正在加载支付表单...
+                  </span>
+                </div>
+              ) : stripeError && !stripeLib ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+                  {stripeError}
+                </div>
+              ) : (
+                <>
+                  <div
+                    ref={stripeContainerRef}
+                    className={['rounded-lg border p-4', dark ? 'border-slate-700 bg-slate-900' : 'border-gray-200 bg-white'].join(' ')}
+                  />
+                  {stripeError && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+                      {stripeError}
+                    </div>
+                  )}
+                  {stripeSuccess ? (
+                    <div className="text-center">
+                      <div className="text-4xl text-green-600">{'\u2713'}</div>
+                      <p className={['mt-2 text-sm', dark ? 'text-slate-400' : 'text-gray-500'].join(' ')}>
+                        支付成功，正在处理订单...
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={stripeSubmitting}
+                      onClick={handleStripeSubmit}
+                      className={[
+                        'w-full rounded-lg py-3 font-medium text-white shadow-md transition-colors',
+                        stripeSubmitting
+                          ? 'bg-gray-400 cursor-not-allowed'
+                          : 'bg-[#635bff] hover:bg-[#5249d9] active:bg-[#4840c4]',
+                      ].join(' ')}
+                    >
+                      {stripeSubmitting ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          处理中...
+                        </span>
+                      ) : (
+                        `支付 ¥${amount.toFixed(2)}`
+                      )}
+                    </button>
+                  )}
+                  {popupBlocked && (
+                    <div className={['rounded-lg border p-3 text-sm', dark ? 'border-amber-700 bg-amber-900/30 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-700'].join(' ')}>
+                      弹出窗口被浏览器拦截，请允许本站弹出窗口后重试
+                    </div>
+                  )}
+                </>
               )}
-              <p className={['text-center text-sm', dark ? 'text-slate-400' : 'text-gray-500'].join(' ')}>
-                {!checkoutUrl || !isSafeCheckoutUrl(checkoutUrl)
-                  ? '\u652F\u4ED8\u94FE\u63A5\u521B\u5EFA\u5931\u8D25\uFF0C\u8BF7\u8FD4\u56DE\u91CD\u8BD5'
-                  : '\u5728\u65B0\u7A97\u53E3\u5B8C\u6210\u652F\u4ED8\u540E\uFF0C\u6B64\u9875\u9762\u5C06\u81EA\u52A8\u66F4\u65B0'}
-              </p>
-            </>
+            </div>
           ) : (
             <>
               {qrDataUrl && (

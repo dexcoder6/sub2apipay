@@ -32,50 +32,38 @@ export class StripeProvider implements PaymentProvider {
 
   async createPayment(request: CreatePaymentRequest): Promise<CreatePaymentResponse> {
     const stripe = this.getClient();
-    const env = getEnv();
 
-    const timeoutMinutes = Math.max(30, env.ORDER_TIMEOUT_MINUTES); // Stripe minimum is 30 minutes
+    const amountInCents = Math.round(new Prisma.Decimal(request.amount).mul(100).toNumber());
 
-    const session = await stripe.checkout.sessions.create(
+    const pi = await stripe.paymentIntents.create(
       {
-        mode: 'payment',
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price_data: {
-              currency: 'cny',
-              product_data: { name: request.subject },
-              unit_amount: Math.round(new Prisma.Decimal(request.amount).mul(100).toNumber()),
-            },
-            quantity: 1,
-          },
-        ],
+        amount: amountInCents,
+        currency: 'cny',
+        automatic_payment_methods: { enabled: true },
         metadata: { orderId: request.orderId },
-        expires_at: Math.floor(Date.now() / 1000) + timeoutMinutes * 60,
-        success_url: `${env.NEXT_PUBLIC_APP_URL}/pay/result?order_id=${request.orderId}&status=success`,
-        cancel_url: `${env.NEXT_PUBLIC_APP_URL}/pay/result?order_id=${request.orderId}&status=cancelled`,
+        description: request.subject,
       },
-      { idempotencyKey: `checkout-${request.orderId}` },
+      { idempotencyKey: `pi-${request.orderId}` },
     );
 
     return {
-      tradeNo: session.id,
-      checkoutUrl: session.url || undefined,
+      tradeNo: pi.id,
+      clientSecret: pi.client_secret || undefined,
     };
   }
 
   async queryOrder(tradeNo: string): Promise<QueryOrderResponse> {
     const stripe = this.getClient();
-    const session = await stripe.checkout.sessions.retrieve(tradeNo);
+    const pi = await stripe.paymentIntents.retrieve(tradeNo);
 
     let status: QueryOrderResponse['status'] = 'pending';
-    if (session.payment_status === 'paid') status = 'paid';
-    else if (session.status === 'expired') status = 'failed';
+    if (pi.status === 'succeeded') status = 'paid';
+    else if (pi.status === 'canceled') status = 'failed';
 
     return {
-      tradeNo: session.id,
+      tradeNo: pi.id,
       status,
-      amount: new Prisma.Decimal(session.amount_total || 0).div(100).toNumber(),
+      amount: new Prisma.Decimal(pi.amount).div(100).toNumber(),
     };
   }
 
@@ -91,23 +79,23 @@ export class StripeProvider implements PaymentProvider {
       env.STRIPE_WEBHOOK_SECRET,
     );
 
-    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
-      const session = event.data.object as Stripe.Checkout.Session;
+    if (event.type === 'payment_intent.succeeded') {
+      const pi = event.data.object as Stripe.PaymentIntent;
       return {
-        tradeNo: session.id,
-        orderId: session.metadata?.orderId || '',
-        amount: new Prisma.Decimal(session.amount_total || 0).div(100).toNumber(),
-        status: session.payment_status === 'paid' ? 'success' : 'failed',
+        tradeNo: pi.id,
+        orderId: pi.metadata?.orderId || '',
+        amount: new Prisma.Decimal(pi.amount).div(100).toNumber(),
+        status: 'success',
         rawData: event,
       };
     }
 
-    if (event.type === 'checkout.session.async_payment_failed') {
-      const session = event.data.object as Stripe.Checkout.Session;
+    if (event.type === 'payment_intent.payment_failed') {
+      const pi = event.data.object as Stripe.PaymentIntent;
       return {
-        tradeNo: session.id,
-        orderId: session.metadata?.orderId || '',
-        amount: new Prisma.Decimal(session.amount_total || 0).div(100).toNumber(),
+        tradeNo: pi.id,
+        orderId: pi.metadata?.orderId || '',
+        amount: new Prisma.Decimal(pi.amount).div(100).toNumber(),
         status: 'failed',
         rawData: event,
       };
@@ -120,12 +108,9 @@ export class StripeProvider implements PaymentProvider {
   async refund(request: RefundRequest): Promise<RefundResponse> {
     const stripe = this.getClient();
 
-    // Retrieve checkout session to find the payment intent
-    const session = await stripe.checkout.sessions.retrieve(request.tradeNo);
-    if (!session.payment_intent) throw new Error('No payment intent found for session');
-
+    // tradeNo is now the PaymentIntent ID directly
     const refund = await stripe.refunds.create({
-      payment_intent: typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent.id,
+      payment_intent: request.tradeNo,
       amount: Math.round(new Prisma.Decimal(request.amount).mul(100).toNumber()),
       reason: 'requested_by_customer',
     });
@@ -138,6 +123,6 @@ export class StripeProvider implements PaymentProvider {
 
   async cancelPayment(tradeNo: string): Promise<void> {
     const stripe = this.getClient();
-    await stripe.checkout.sessions.expire(tradeNo);
+    await stripe.paymentIntents.cancel(tradeNo);
   }
 }

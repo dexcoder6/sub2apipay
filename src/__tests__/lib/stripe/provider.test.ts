@@ -9,18 +9,18 @@ vi.mock('@/lib/config', () => ({
   }),
 }));
 
-const mockSessionCreate = vi.fn();
-const mockSessionRetrieve = vi.fn();
+const mockPaymentIntentCreate = vi.fn();
+const mockPaymentIntentRetrieve = vi.fn();
+const mockPaymentIntentCancel = vi.fn();
 const mockRefundCreate = vi.fn();
 const mockWebhooksConstructEvent = vi.fn();
 
 vi.mock('stripe', () => {
   const StripeMock = function (this: Record<string, unknown>) {
-    this.checkout = {
-      sessions: {
-        create: mockSessionCreate,
-        retrieve: mockSessionRetrieve,
-      },
+    this.paymentIntents = {
+      create: mockPaymentIntentCreate,
+      retrieve: mockPaymentIntentRetrieve,
+      cancel: mockPaymentIntentCancel,
     };
     this.refunds = {
       create: mockRefundCreate,
@@ -54,10 +54,10 @@ describe('StripeProvider', () => {
   });
 
   describe('createPayment', () => {
-    it('should create a checkout session and return checkoutUrl', async () => {
-      mockSessionCreate.mockResolvedValue({
-        id: 'cs_test_abc123',
-        url: 'https://checkout.stripe.com/pay/cs_test_abc123',
+    it('should create a PaymentIntent and return clientSecret', async () => {
+      mockPaymentIntentCreate.mockResolvedValue({
+        id: 'pi_test_abc123',
+        client_secret: 'pi_test_abc123_secret_xyz',
       });
 
       const request: CreatePaymentRequest = {
@@ -70,34 +70,26 @@ describe('StripeProvider', () => {
 
       const result = await provider.createPayment(request);
 
-      expect(result.tradeNo).toBe('cs_test_abc123');
-      expect(result.checkoutUrl).toBe('https://checkout.stripe.com/pay/cs_test_abc123');
-      expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect(result.tradeNo).toBe('pi_test_abc123');
+      expect(result.clientSecret).toBe('pi_test_abc123_secret_xyz');
+      expect(mockPaymentIntentCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          mode: 'payment',
-          payment_method_types: ['card'],
+          amount: 9999,
+          currency: 'cny',
+          automatic_payment_methods: { enabled: true },
           metadata: { orderId: 'order-001' },
-          expires_at: expect.any(Number),
-          line_items: [
-            expect.objectContaining({
-              price_data: expect.objectContaining({
-                currency: 'cny',
-                unit_amount: 9999,
-              }),
-              quantity: 1,
-            }),
-          ],
+          description: 'Sub2API Balance Recharge 99.99 CNY',
         }),
         expect.objectContaining({
-          idempotencyKey: 'checkout-order-001',
+          idempotencyKey: 'pi-order-001',
         }),
       );
     });
 
-    it('should handle session with null url', async () => {
-      mockSessionCreate.mockResolvedValue({
-        id: 'cs_test_no_url',
-        url: null,
+    it('should handle null client_secret', async () => {
+      mockPaymentIntentCreate.mockResolvedValue({
+        id: 'pi_test_no_secret',
+        client_secret: null,
       });
 
       const request: CreatePaymentRequest = {
@@ -108,61 +100,58 @@ describe('StripeProvider', () => {
       };
 
       const result = await provider.createPayment(request);
-      expect(result.tradeNo).toBe('cs_test_no_url');
-      expect(result.checkoutUrl).toBeUndefined();
+      expect(result.tradeNo).toBe('pi_test_no_secret');
+      expect(result.clientSecret).toBeUndefined();
     });
   });
 
   describe('queryOrder', () => {
-    it('should return paid status for paid session', async () => {
-      mockSessionRetrieve.mockResolvedValue({
-        id: 'cs_test_abc123',
-        payment_status: 'paid',
-        amount_total: 9999,
+    it('should return paid status for succeeded PaymentIntent', async () => {
+      mockPaymentIntentRetrieve.mockResolvedValue({
+        id: 'pi_test_abc123',
+        status: 'succeeded',
+        amount: 9999,
       });
 
-      const result = await provider.queryOrder('cs_test_abc123');
-      expect(result.tradeNo).toBe('cs_test_abc123');
+      const result = await provider.queryOrder('pi_test_abc123');
+      expect(result.tradeNo).toBe('pi_test_abc123');
       expect(result.status).toBe('paid');
       expect(result.amount).toBe(99.99);
     });
 
-    it('should return failed status for expired session', async () => {
-      mockSessionRetrieve.mockResolvedValue({
-        id: 'cs_test_expired',
-        payment_status: 'unpaid',
-        status: 'expired',
-        amount_total: 5000,
+    it('should return failed status for canceled PaymentIntent', async () => {
+      mockPaymentIntentRetrieve.mockResolvedValue({
+        id: 'pi_test_canceled',
+        status: 'canceled',
+        amount: 5000,
       });
 
-      const result = await provider.queryOrder('cs_test_expired');
+      const result = await provider.queryOrder('pi_test_canceled');
       expect(result.status).toBe('failed');
       expect(result.amount).toBe(50);
     });
 
-    it('should return pending status for unpaid session', async () => {
-      mockSessionRetrieve.mockResolvedValue({
-        id: 'cs_test_pending',
-        payment_status: 'unpaid',
-        status: 'open',
-        amount_total: 1000,
+    it('should return pending status for requires_payment_method', async () => {
+      mockPaymentIntentRetrieve.mockResolvedValue({
+        id: 'pi_test_pending',
+        status: 'requires_payment_method',
+        amount: 1000,
       });
 
-      const result = await provider.queryOrder('cs_test_pending');
+      const result = await provider.queryOrder('pi_test_pending');
       expect(result.status).toBe('pending');
     });
   });
 
   describe('verifyNotification', () => {
-    it('should verify and parse checkout.session.completed event', async () => {
+    it('should verify and parse payment_intent.succeeded event', async () => {
       const mockEvent = {
-        type: 'checkout.session.completed',
+        type: 'payment_intent.succeeded',
         data: {
           object: {
-            id: 'cs_test_abc123',
+            id: 'pi_test_abc123',
             metadata: { orderId: 'order-001' },
-            amount_total: 9999,
-            payment_status: 'paid',
+            amount: 9999,
           },
         },
       };
@@ -172,21 +161,20 @@ describe('StripeProvider', () => {
       const result = await provider.verifyNotification('{"raw":"body"}', { 'stripe-signature': 'sig_test_123' });
 
       expect(result).not.toBeNull();
-      expect(result!.tradeNo).toBe('cs_test_abc123');
+      expect(result!.tradeNo).toBe('pi_test_abc123');
       expect(result!.orderId).toBe('order-001');
       expect(result!.amount).toBe(99.99);
       expect(result!.status).toBe('success');
     });
 
-    it('should return failed status for unpaid session', async () => {
+    it('should return failed status for payment_intent.payment_failed', async () => {
       const mockEvent = {
-        type: 'checkout.session.completed',
+        type: 'payment_intent.payment_failed',
         data: {
           object: {
-            id: 'cs_test_unpaid',
+            id: 'pi_test_failed',
             metadata: { orderId: 'order-002' },
-            amount_total: 5000,
-            payment_status: 'unpaid',
+            amount: 5000,
           },
         },
       };
@@ -210,19 +198,14 @@ describe('StripeProvider', () => {
   });
 
   describe('refund', () => {
-    it('should refund via payment intent from session', async () => {
-      mockSessionRetrieve.mockResolvedValue({
-        id: 'cs_test_abc123',
-        payment_intent: 'pi_test_payment_intent',
-      });
-
+    it('should refund directly using PaymentIntent ID', async () => {
       mockRefundCreate.mockResolvedValue({
         id: 're_test_refund_001',
         status: 'succeeded',
       });
 
       const request: RefundRequest = {
-        tradeNo: 'cs_test_abc123',
+        tradeNo: 'pi_test_abc123',
         orderId: 'order-001',
         amount: 50,
         reason: 'customer request',
@@ -232,50 +215,34 @@ describe('StripeProvider', () => {
       expect(result.refundId).toBe('re_test_refund_001');
       expect(result.status).toBe('success');
       expect(mockRefundCreate).toHaveBeenCalledWith({
-        payment_intent: 'pi_test_payment_intent',
+        payment_intent: 'pi_test_abc123',
         amount: 5000,
         reason: 'requested_by_customer',
       });
     });
 
-    it('should handle payment intent as object', async () => {
-      mockSessionRetrieve.mockResolvedValue({
-        id: 'cs_test_abc123',
-        payment_intent: { id: 'pi_test_obj_intent', amount: 10000 },
-      });
-
+    it('should handle pending refund status', async () => {
       mockRefundCreate.mockResolvedValue({
         id: 're_test_refund_002',
         status: 'pending',
       });
 
       const result = await provider.refund({
-        tradeNo: 'cs_test_abc123',
+        tradeNo: 'pi_test_abc123',
         orderId: 'order-002',
         amount: 100,
       });
 
       expect(result.status).toBe('pending');
-      expect(mockRefundCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payment_intent: 'pi_test_obj_intent',
-        }),
-      );
     });
+  });
 
-    it('should throw if no payment intent found', async () => {
-      mockSessionRetrieve.mockResolvedValue({
-        id: 'cs_test_no_pi',
-        payment_intent: null,
-      });
+  describe('cancelPayment', () => {
+    it('should cancel a PaymentIntent', async () => {
+      mockPaymentIntentCancel.mockResolvedValue({ id: 'pi_test_abc123', status: 'canceled' });
 
-      await expect(
-        provider.refund({
-          tradeNo: 'cs_test_no_pi',
-          orderId: 'order-003',
-          amount: 20,
-        }),
-      ).rejects.toThrow('No payment intent found');
+      await provider.cancelPayment('pi_test_abc123');
+      expect(mockPaymentIntentCancel).toHaveBeenCalledWith('pi_test_abc123');
     });
   });
 });

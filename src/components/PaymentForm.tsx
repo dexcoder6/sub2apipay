@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { PAYMENT_TYPE_META } from '@/lib/pay-utils';
 
 export interface MethodLimitInfo {
@@ -25,7 +25,7 @@ interface PaymentFormProps {
   dark?: boolean;
 }
 
-const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500];
+const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500, 1000, 2000];
 const AMOUNT_TEXT_PATTERN = /^\d*(\.\d{0,2})?$/;
 
 function hasValidCentPrecision(num: number): boolean {
@@ -47,6 +47,13 @@ export default function PaymentForm({
   const [amount, setAmount] = useState<number | ''>('');
   const [paymentType, setPaymentType] = useState(enabledPaymentTypes[0] || 'alipay');
   const [customAmount, setCustomAmount] = useState('');
+
+  // Reset paymentType when enabledPaymentTypes changes (e.g. after config loads)
+  useEffect(() => {
+    if (!enabledPaymentTypes.includes(paymentType)) {
+      setPaymentType(enabledPaymentTypes[0] || 'stripe');
+    }
+  }, [enabledPaymentTypes, paymentType]);
 
   const handleQuickAmount = (val: number) => {
     setAmount(val);
@@ -159,7 +166,7 @@ export default function PaymentForm({
           充值金额
         </label>
         <div className="grid grid-cols-3 gap-2">
-          {QUICK_AMOUNTS.filter((val) => val <= effectiveMax).map((val) => (
+          {QUICK_AMOUNTS.filter((val) => val >= minAmount && val <= effectiveMax).map((val) => (
             <button
               key={val}
               type="button"
@@ -222,69 +229,71 @@ export default function PaymentForm({
         );
       })()}
 
-      {/* Payment Type */}
-      <div>
-        <label className={['mb-2 block text-sm font-medium', dark ? 'text-slate-200' : 'text-gray-700'].join(' ')}>
-          支付方式
-        </label>
-        <div className="flex gap-3">
-          {enabledPaymentTypes.map((type) => {
-            const meta = PAYMENT_TYPE_META[type];
-            const isSelected = paymentType === type;
-            const limitInfo = methodLimits?.[type];
-            const isUnavailable = limitInfo !== undefined && !limitInfo.available;
+      {/* Payment Type — only show when multiple types available */}
+      {enabledPaymentTypes.length > 1 && (
+        <div>
+          <label className={['mb-2 block text-sm font-medium', dark ? 'text-slate-200' : 'text-gray-700'].join(' ')}>
+            支付方式
+          </label>
+          <div className="flex gap-3">
+            {enabledPaymentTypes.map((type) => {
+              const meta = PAYMENT_TYPE_META[type];
+              const isSelected = paymentType === type;
+              const limitInfo = methodLimits?.[type];
+              const isUnavailable = limitInfo !== undefined && !limitInfo.available;
 
-            return (
-              <button
-                key={type}
-                type="button"
-                disabled={isUnavailable}
-                onClick={() => !isUnavailable && setPaymentType(type)}
-                title={isUnavailable ? '今日充值额度已满，请使用其他支付方式' : undefined}
-                className={[
-                  'relative flex h-[58px] flex-1 flex-col items-center justify-center rounded-lg border px-3 transition-all',
-                  isUnavailable
-                    ? dark
-                      ? 'cursor-not-allowed border-slate-700 bg-slate-800/50 opacity-50'
-                      : 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50'
-                    : isSelected
-                      ? `${meta?.selectedBorder || 'border-blue-500'} ${meta?.selectedBg || 'bg-blue-50'} text-slate-900 shadow-sm`
-                      : dark
-                        ? 'border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-500'
-                        : 'border-gray-300 bg-white text-slate-700 hover:border-gray-400',
-                ].join(' ')}
-              >
-                <span className="flex items-center gap-2">
-                  {renderPaymentIcon(type)}
-                  <span className="flex flex-col items-start leading-none">
-                    <span className="text-xl font-semibold tracking-tight">{meta?.label || type}</span>
-                    {isUnavailable ? (
-                      <span className="text-[10px] tracking-wide text-red-400">今日额度已满</span>
-                    ) : meta?.sublabel ? (
-                      <span
-                        className={`text-[10px] tracking-wide ${dark && !isSelected ? 'text-slate-400' : 'text-slate-600'}`}
-                      >
-                        {meta.sublabel}
-                      </span>
-                    ) : null}
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  disabled={isUnavailable}
+                  onClick={() => !isUnavailable && setPaymentType(type)}
+                  title={isUnavailable ? '今日充值额度已满，请使用其他支付方式' : undefined}
+                  className={[
+                    'relative flex h-[58px] flex-1 flex-col items-center justify-center rounded-lg border px-3 transition-all',
+                    isUnavailable
+                      ? dark
+                        ? 'cursor-not-allowed border-slate-700 bg-slate-800/50 opacity-50'
+                        : 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50'
+                      : isSelected
+                        ? `${meta?.selectedBorder || 'border-blue-500'} ${meta?.selectedBg || 'bg-blue-50'} text-slate-900 shadow-sm`
+                        : dark
+                          ? 'border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-500'
+                          : 'border-gray-300 bg-white text-slate-700 hover:border-gray-400',
+                  ].join(' ')}
+                >
+                  <span className="flex items-center gap-2">
+                    {renderPaymentIcon(type)}
+                    <span className="flex flex-col items-start leading-none">
+                      <span className="text-xl font-semibold tracking-tight">{meta?.label || type}</span>
+                      {isUnavailable ? (
+                        <span className="text-[10px] tracking-wide text-red-400">今日额度已满</span>
+                      ) : meta?.sublabel ? (
+                        <span
+                          className={`text-[10px] tracking-wide ${dark && !isSelected ? 'text-slate-400' : 'text-slate-600'}`}
+                        >
+                          {meta.sublabel}
+                        </span>
+                      ) : null}
+                    </span>
                   </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                </button>
+              );
+            })}
+          </div>
 
-        {/* 当前选中渠道额度不足时的提示 */}
-        {(() => {
-          const limitInfo = methodLimits?.[paymentType];
-          if (!limitInfo || limitInfo.available) return null;
-          return (
-            <p className={['mt-2 text-xs', dark ? 'text-amber-300' : 'text-amber-600'].join(' ')}>
-              所选支付方式今日额度已满，请切换到其他支付方式
-            </p>
-          );
-        })()}
-      </div>
+          {/* 当前选中渠道额度不足时的提示 */}
+          {(() => {
+            const limitInfo = methodLimits?.[paymentType];
+            if (!limitInfo || limitInfo.available) return null;
+            return (
+              <p className={['mt-2 text-xs', dark ? 'text-amber-300' : 'text-amber-600'].join(' ')}>
+                所选支付方式今日额度已满，请切换到其他支付方式
+              </p>
+            );
+          })()}
+        </div>
+      )}
 
       {/* Fee Detail */}
       {feeRate > 0 && selectedAmount > 0 && (

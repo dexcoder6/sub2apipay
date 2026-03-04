@@ -8,9 +8,18 @@ function ResultContent() {
   // Support both ZPAY (out_trade_no) and Stripe (order_id) callback params
   const outTradeNo = searchParams.get('out_trade_no') || searchParams.get('order_id');
   const tradeStatus = searchParams.get('trade_status') || searchParams.get('status');
+  const isPopup = searchParams.get('popup') === '1';
 
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isInPopup, setIsInPopup] = useState(false);
+
+  // Detect if opened as a popup window (from stripe-popup or via popup=1 param)
+  useEffect(() => {
+    if (isPopup || window.opener) {
+      setIsInPopup(true);
+    }
+  }, [isPopup]);
 
   useEffect(() => {
     if (!outTradeNo) {
@@ -42,6 +51,17 @@ function ResultContent() {
     };
   }, [outTradeNo]);
 
+  // Auto-close popup window on success
+  const isSuccess = status === 'COMPLETED' || status === 'PAID' || status === 'RECHARGING';
+
+  useEffect(() => {
+    if (!isInPopup || !isSuccess) return;
+    const timer = setTimeout(() => {
+      window.close();
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [isInPopup, isSuccess]);
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -50,7 +70,6 @@ function ResultContent() {
     );
   }
 
-  const isSuccess = status === 'COMPLETED' || status === 'PAID' || status === 'RECHARGING';
   const isPending = status === 'PENDING';
 
   return (
@@ -65,12 +84,33 @@ function ResultContent() {
             <p className="mt-2 text-gray-500">
               {status === 'COMPLETED' ? '余额已成功到账！' : '支付成功，余额正在充值中...'}
             </p>
+            {isInPopup && (
+              <div className="mt-4 space-y-2">
+                <p className="text-sm text-gray-400">此窗口将在 3 秒后自动关闭</p>
+                <button
+                  type="button"
+                  onClick={() => window.close()}
+                  className="text-sm text-blue-600 underline hover:text-blue-700"
+                >
+                  立即关闭窗口
+                </button>
+              </div>
+            )}
           </>
         ) : isPending ? (
           <>
             <div className="text-6xl text-yellow-500">⏳</div>
             <h1 className="mt-4 text-xl font-bold text-yellow-600">等待支付</h1>
             <p className="mt-2 text-gray-500">订单尚未完成支付</p>
+            {isInPopup && (
+              <button
+                type="button"
+                onClick={() => window.close()}
+                className="mt-4 text-sm text-blue-600 underline hover:text-blue-700"
+              >
+                关闭窗口
+              </button>
+            )}
           </>
         ) : (
           <>
@@ -85,6 +125,15 @@ function ResultContent() {
                   ? '订单已被取消'
                   : '请联系管理员处理'}
             </p>
+            {isInPopup && (
+              <button
+                type="button"
+                onClick={() => window.close()}
+                className="mt-4 text-sm text-blue-600 underline hover:text-blue-700"
+              >
+                关闭窗口
+              </button>
+            )}
           </>
         )}
 

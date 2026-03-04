@@ -17,7 +17,7 @@ export interface CreatePaymentResponse {
   tradeNo: string; // third-party transaction ID
   payUrl?: string; // H5 payment URL (alipay/wxpay)
   qrCode?: string; // QR code content
-  checkoutUrl?: string; // Stripe Checkout URL
+  clientSecret?: string; // Stripe PaymentIntent client secret (for embedded Payment Element)
 }
 
 /** Response from querying an order's payment status */

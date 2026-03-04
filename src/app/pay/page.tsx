@@ -18,7 +18,7 @@ interface OrderResult {
   paymentType: 'alipay' | 'wxpay' | 'stripe';
   payUrl?: string | null;
   qrCode?: string | null;
-  checkoutUrl?: string | null;
+  clientSecret?: string | null;
   expiresAt: string;
 }
 
@@ -30,6 +30,7 @@ interface AppConfig {
   methodLimits?: Record<string, MethodLimitInfo>;
   helpImageUrl?: string | null;
   helpText?: string | null;
+  stripePublishableKey?: string | null;
 }
 
 function PayContent() {
@@ -59,7 +60,7 @@ function PayContent() {
   const [activeMobileTab, setActiveMobileTab] = useState<'pay' | 'orders'>('pay');
 
   const [config, setConfig] = useState<AppConfig>({
-    enabledPaymentTypes: ['alipay', 'wxpay', 'stripe'],
+    enabledPaymentTypes: [],
     minAmount: 1,
     maxAmount: 1000,
     maxDailyAmount: 0,
@@ -108,6 +109,7 @@ function PayContent() {
             methodLimits: cfgData.config.methodLimits,
             helpImageUrl: cfgData.config.helpImageUrl ?? null,
             helpText: cfgData.config.helpText ?? null,
+            stripePublishableKey: cfgData.config.stripePublishableKey ?? null,
           });
         }
       } else if (cfgRes.status === 404) {
@@ -261,7 +263,7 @@ function PayContent() {
         paymentType: data.paymentType || paymentType,
         payUrl: data.payUrl,
         qrCode: data.qrCode,
-        checkoutUrl: data.checkoutUrl,
+        clientSecret: data.clientSecret,
         expiresAt: data.expiresAt,
       });
 
@@ -377,7 +379,16 @@ function PayContent() {
         </div>
       )}
 
-      {step === 'form' && (
+      {step === 'form' && config.enabledPaymentTypes.length === 0 && (
+        <div className="flex items-center justify-center py-12">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+          <span className={['ml-3 text-sm', isDark ? 'text-slate-400' : 'text-gray-500'].join(' ')}>
+            加载中...
+          </span>
+        </div>
+      )}
+
+      {step === 'form' && config.enabledPaymentTypes.length > 0 && (
         <>
           {isMobile ? (
             activeMobileTab === 'pay' ? (
@@ -465,7 +476,8 @@ function PayContent() {
           token={token || undefined}
           payUrl={orderResult.payUrl}
           qrCode={orderResult.qrCode}
-          checkoutUrl={orderResult.checkoutUrl}
+          clientSecret={orderResult.clientSecret}
+          stripePublishableKey={config.stripePublishableKey}
           paymentType={orderResult.paymentType}
           amount={orderResult.amount}
           payAmount={orderResult.payAmount}
@@ -473,6 +485,7 @@ function PayContent() {
           onStatusChange={handleStatusChange}
           onBack={handleBack}
           dark={isDark}
+          isEmbedded={isEmbedded}
         />
       )}
 
